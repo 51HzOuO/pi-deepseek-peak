@@ -72,58 +72,13 @@ export function isOffPeak(date: Date): boolean {
 	return !PEAK_WINDOWS.some(([start, end]) => h >= start && h < end);
 }
 
-// --- DeepSeek pricing (USD per 1M tokens; peak rates) ---
-// Official: https://api-docs.deepseek.com/quick_start/pricing/
-// Two models are served: deepseek-flash (V4.1-Flash) and deepseek-v4-pro (V4-Pro-0813).
-// The retired ids (deepseek-v4-flash, deepseek-v4-flash-vision-exp) are still accepted by the
-// API, served by V4.1-Flash and billed at the Flash price — the API reports `deepseek-flash`
-// as `responseModel`, which rateForIds() resolves first, so they price correctly anyway.
-// Off-peak = exactly half (official rule), derived at use time. cacheWrite is free.
-// hardcoded per user choice — bump on the next rate change.
-type Rate = { input: number; cacheRead: number; output: number };
-
-const FLASH_RATES: Rate = { input: 0.3, cacheRead: 0.006, output: 1.2 };
-const PRO_RATES: Rate = { input: 1.32, cacheRead: 0.044, output: 3.96 };
-const RATES: Record<string, Rate> = {
-	"deepseek-flash": FLASH_RATES,
-	"deepseek-v4-pro": PRO_RATES,
-};
-
-type Timestamp = number | string | Date;
-
-function toMs(ts: Timestamp): number {
-	return typeof ts === "number" ? ts : new Date(ts).getTime();
-}
-
-/** Effective per-token rates (USD) for a model at a timestamp, or null when the model isn't in the table. */
-function rateFor(model: string, ts: Timestamp): Rate | null {
-	const peak = RATES[model];
-	if (!peak) return null;
-	const k = isOffPeak(new Date(toMs(ts))) ? 0.5 : 1;
-	return { input: peak.input * k, cacheRead: peak.cacheRead * k, output: peak.output * k };
-}
-
 /**
- * First id present in the rate table wins. The API reports the canonical id (`responseModel`,
- * e.g. `deepseek-flash`) while the requested id is the fallback.
- */
-function rateForIds(
-	ids: Array<string | undefined | null>,
-	ts: Timestamp,
-): { model: string; rate: Rate } | null {
-	for (const id of ids) {
-		if (id && RATES[id]) return { model: id, rate: rateFor(id, ts)! };
-	}
-	return null;
-}
-
-/**
- * First instant where the green/red status flips, or null (never within range).
+ * First instant where the status flips, or null (never within range).
  * Candidates: UTC window edges (01:00/04:00/06:00/10:00) and Beijing midnights, for
  * the 4 UTC calendar days starting today. Boundaries where the status stays the same
  * (e.g. weekend end = Beijing Monday midnight while local is Sunday evening) are skipped.
  */
-export function nextPriceChange(date: Date): Date | null {
+export function nextStatusChange(date: Date): Date | null {
 	const now = date.getTime();
 	const day = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 	const state = isOffPeak(date);
@@ -141,7 +96,7 @@ export function nextPriceChange(date: Date): Date | null {
 
 /** Time until the next status flip: "27h", "1h30m", "45m" (rounded up to the minute). */
 export function formatCountdown(date: Date): string {
-	const next = nextPriceChange(date);
+	const next = nextStatusChange(date);
 	if (!next) return "";
 	const m = Math.ceil((next.getTime() - date.getTime()) / 60000);
 	if (m % 60 === 0) return `${m / 60}h`;
@@ -254,26 +209,6 @@ export default function (pi: ExtensionAPI) {
 			syncModel(ctx, ctx.model);
 			ctx.ui.notify(`DeepSeek countdown ${label(picked)}`, "info");
 		},
-	});
-
-	pi.on("message_end", async (event: any, _ctx: any) => {
-		const msg = event.message;
-		if (msg.role !== "assistant" || !msg.usage) return;
-		// Patch the stored cost with the rate in effect when the request completed, so every
-		// pi cost surface (footer, /session, usage totals) shows the real DeepSeek price.
-		const resolved = rateForIds([msg.responseModel, msg.model], msg.timestamp ?? Date.now());
-		if (!resolved) return; // unknown model: keep pi's stored cost
-		const rate = resolved.rate;
-		const u = msg.usage;
-		const cost = {
-			input: (u.input * rate.input) / 1e6,
-			output: (u.output * rate.output) / 1e6,
-			cacheRead: (u.cacheRead * rate.cacheRead) / 1e6,
-			cacheWrite: 0,
-			total: 0,
-		};
-		cost.total = cost.input + cost.output + cost.cacheRead;
-		return { message: { ...msg, usage: { ...u, cost } } };
 	});
 
 	pi.on("session_start", async (_event: any, ctx: any) => {

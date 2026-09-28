@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isOffPeak, nextPriceChange, formatCountdown, statusText, configPath, isDeepSeekModel } from "../extensions/deepseek-peak.ts";
+import { isOffPeak, nextStatusChange, formatCountdown, statusText, configPath, isDeepSeekModel } from "../extensions/deepseek-peak.ts";
 
 const H = 3600e3;
 // Fixed clock: 2026-08-21 = Friday, 08-22 = Saturday, 08-23 = Sunday, 08-24 = Monday (UTC).
@@ -35,9 +35,9 @@ assert.equal(isOffPeak(new Date(mon + 10 * H)), true, "Mon 10:00 UTC -> off-peak
 assert.equal(isOffPeak(new Date(mon + H - 1)), true, "Mon 00:59:59.999 UTC -> off-peak");
 assert.equal(isOffPeak(new Date(mon + 20 * H)), true, "Mon 20:00 UTC -> off-peak");
 
-// --- nextPriceChange: skips no-flip boundaries (Beijing weekend start/end) ---
+// --- nextStatusChange: skips no-flip boundaries (Beijing weekend start/end) ---
 assert.equal(
-	nextPriceChange(new Date(fri + 15 * H))?.getTime(),
+	nextStatusChange(new Date(fri + 15 * H))?.getTime(),
 	mon + H,
 	"Fri 15:00 UTC -> next flip is Mon 01:00 UTC (Beijing midnight Sat & Sun edges skip)",
 );
