@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Show `DS Peak` / `DS Normal` and run the status refresh timer only when the active model's provider is `deepseek`; switching to another provider clears the status immediately
+
 ## 1.3.6 (2026-09-16)
 
 - Fix silently wrong costs on V4 Pro: the pro→flash routing has been retracted (DeepSeek keeps serving `deepseek-v4-pro` after 2026-09-14 with unchanged billing), so pro messages are billed at the pro rates ($1.32 / $0.044 / $3.96 per 1M at peak, half off-peak) at any date, in `message_end` as well as `/dsp-cost`; the `(routed to flash)` suffix is gone

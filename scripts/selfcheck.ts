@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isOffPeak, nextPriceChange, formatCountdown, statusText, configPath } from "../extensions/deepseek-peak.ts";
+import { isOffPeak, nextPriceChange, formatCountdown, statusText, configPath, isDeepSeekModel } from "../extensions/deepseek-peak.ts";
 
 const H = 3600e3;
 // Fixed clock: 2026-08-21 = Friday, 08-22 = Saturday, 08-23 = Sunday, 08-24 = Monday (UTC).
@@ -11,6 +11,13 @@ const fri = Date.UTC(2026, 7, 21);
 const sat = Date.UTC(2026, 7, 22);
 const sun = Date.UTC(2026, 7, 23);
 const mon = Date.UTC(2026, 7, 24);
+
+// --- Active model provider ---
+assert.equal(isDeepSeekModel({ provider: "deepseek", id: "deepseek-flash" }), true, "DeepSeek provider -> active");
+assert.equal(isDeepSeekModel({ provider: "deepseek", id: "custom-model" }), true, "custom DeepSeek model id -> active");
+assert.equal(isDeepSeekModel({ provider: "anthropic", id: "claude" }), false, "other provider -> inactive");
+assert.equal(isDeepSeekModel({}), false, "missing provider -> inactive");
+assert.equal(isDeepSeekModel(undefined), false, "missing model -> inactive");
 
 // --- Weekends (Sat/Sun Beijing time) are off-peak all day, even inside UTC peak windows ---
 assert.equal(isOffPeak(new Date(sat + 2 * H)), true, "Sat 02:00 UTC (Beijing 10:00) -> off-peak");

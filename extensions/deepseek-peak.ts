@@ -55,6 +55,10 @@ function saveConfig(patch: Partial<Config>): void {
 	writeFileSync(configPath(), JSON.stringify({ ...loadConfig(), ...patch }, null, 2) + "\n");
 }
 
+export function isDeepSeekModel(model: { provider?: string; id?: string } | null | undefined): boolean {
+	return model?.provider === "deepseek";
+}
+
 /** Day of week (0=Sun..6=Sat) in Beijing time (UTC+8) — DeepSeek bills weekends by Beijing time. */
 function beijingDay(date: Date): number {
 	return new Date(date.getTime() + 8 * H).getUTCDay();
@@ -160,6 +164,7 @@ export default function (pi: ExtensionAPI) {
 	// Never capture it in a timer closure. Keep only the current session's ctx,
 	// refreshed on session_start and cleared on session_shutdown.
 	let currentCtx: any = null;
+	let currentModel: { provider?: string; id?: string } | null | undefined;
 
 	function stopTimer(): void {
 		if (timer !== null) {
@@ -168,19 +173,47 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	function updateStatus(ctx: any) {
+	function clearStatus(ctx: any): void {
+		ctx.ui.setStatus("deepseek-peak", undefined);
+	}
+
+	function updateStatus(ctx: any): void {
 		ctx.ui.setStatus("deepseek-peak", statusText(loadConfig().countdown, ctx.ui.theme));
+	}
+
+	function startTimer(): void {
+		if (timer === null && currentCtx !== null && isDeepSeekModel(currentModel)) {
+			timer = setInterval(refreshStatus, loadConfig().refresh * 1000);
+		}
+	}
+
+	function syncModel(ctx: any, model: { provider?: string; id?: string } | null | undefined): void {
+		currentCtx = ctx;
+		currentModel = model;
+		stopTimer();
+		if (!isDeepSeekModel(model)) {
+			clearStatus(ctx);
+			return;
+		}
+		updateStatus(ctx);
+		startTimer();
 	}
 
 	function refreshStatus(): void {
 		if (currentCtx === null) return;
 		try {
+			if (!isDeepSeekModel(currentModel)) {
+				stopTimer();
+				clearStatus(currentCtx);
+				return;
+			}
 			updateStatus(currentCtx);
 		} catch {
 			// ctx went stale (session replaced or /reload). Stop polling instead of
 			// letting an uncaught exception escape the timer and crash pi.
 			stopTimer();
 			currentCtx = null;
+			currentModel = undefined;
 		}
 	}
 
@@ -200,11 +233,7 @@ export default function (pi: ExtensionAPI) {
 			const picked = REFRESH_OPTIONS.find((o) => o.label === choice);
 			if (!picked) return; // cancelled
 			saveConfig({ refresh: picked.seconds });
-			if (timer !== null) {
-				clearInterval(timer);
-				timer = setInterval(refreshStatus, picked.seconds * 1000);
-			}
-			updateStatus(ctx);
+			syncModel(ctx, ctx.model);
 			ctx.ui.notify(`Auto-refresh set to ${picked.label}`, "info");
 		},
 	});
@@ -222,7 +251,7 @@ export default function (pi: ExtensionAPI) {
 			const picked = choice === "on";
 			if (choice !== "on" && choice !== "off") return; // cancelled
 			saveConfig({ countdown: picked });
-			updateStatus(ctx);
+			syncModel(ctx, ctx.model);
 			ctx.ui.notify(`DeepSeek countdown ${label(picked)}`, "info");
 		},
 	});
@@ -248,15 +277,16 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event: any, ctx: any) => {
-		currentCtx = ctx;
-		updateStatus(ctx);
-		if (timer === null) {
-			timer = setInterval(refreshStatus, loadConfig().refresh * 1000);
-		}
+		syncModel(ctx, ctx.model);
+	});
+
+	pi.on("model_select", async (event: any, ctx: any) => {
+		syncModel(ctx, event.model);
 	});
 
 	pi.on("session_shutdown", async () => {
 		stopTimer();
 		currentCtx = null;
+		currentModel = undefined;
 	});
 };
