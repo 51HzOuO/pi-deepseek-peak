@@ -85,126 +85,32 @@ const RATES: Record<string, Rate> = {
 	"deepseek-v4-pro": PRO_RATES,
 };
 
-type UsageLike = {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	totalTokens?: number;
-	cost?: { total: number };
-};
-
 type Timestamp = number | string | Date;
 
 function toMs(ts: Timestamp): number {
 	return typeof ts === "number" ? ts : new Date(ts).getTime();
 }
 
-/** Peak rates (USD/1M) for a model, or null when the model isn't in the table. */
-function ratesFor(model: string): Rate | null {
-	return RATES[model] ?? null;
-}
-
 /** Effective per-token rates (USD) for a model at a timestamp, or null when the model isn't in the table. */
 function rateFor(model: string, ts: Timestamp): Rate | null {
-	const peak = ratesFor(model);
+	const peak = RATES[model];
 	if (!peak) return null;
 	const k = isOffPeak(new Date(toMs(ts))) ? 0.5 : 1;
 	return { input: peak.input * k, cacheRead: peak.cacheRead * k, output: peak.output * k };
 }
 
 /**
- * First id present in the rate table wins (the timestamp still picks peak or off-peak).
- * The API reports the canonical id (`responseModel`, e.g. `deepseek-flash`) while the
- * requested id is the fallback, so callers pass `[responseModel, model]`.
- * Returns null only when no id is known.
+ * First id present in the rate table wins. The API reports the canonical id (`responseModel`,
+ * e.g. `deepseek-flash`) while the requested id is the fallback.
  */
 function rateForIds(
 	ids: Array<string | undefined | null>,
 	ts: Timestamp,
 ): { model: string; rate: Rate } | null {
 	for (const id of ids) {
-		if (id && ratesFor(id)) return { model: id, rate: rateFor(id, ts)! };
+		if (id && RATES[id]) return { model: id, rate: rateFor(id, ts)! };
 	}
 	return null;
-}
-
-/** Real cost of one request (USD); `known: false` with pi's stored total for models outside the table. */
-export function requestCost(
-	model: string,
-	usage: UsageLike,
-	ts: Timestamp,
-): { cost: number; known: boolean } {
-	const rate = rateFor(model, ts);
-	if (!rate) return { cost: usage.cost?.total ?? 0, known: false };
-	const cost = (usage.input * rate.input + usage.cacheRead * rate.cacheRead + usage.output * rate.output) / 1e6;
-	return { cost, known: true };
-}
-
-export interface SessionCost {
-	total: number;
-	peakCost: number;
-	offPeakCost: number;
-	byModel: Record<string, { tokens: number; cost: number }>;
-	fallbackMessages: number;
-	unknownModels: string[];
-}
-
-/**
- * Real session cost from session entries: per-message model and timestamp, peak/off-peak split.
- * Nested tool usage and compaction/branch summaries are attributed to the nearest preceding
- * assistant message's model; without one they count at pi's stored cost (fallbackMessages).
- */
-export function sessionCost(entries: any[]): SessionCost {
-	const result: SessionCost = {
-		total: 0,
-		peakCost: 0,
-		offPeakCost: 0,
-		byModel: {},
-		fallbackMessages: 0,
-		unknownModels: [],
-	};
-	const unknown = new Set<string>();
-	let lastModel: string | null = null;
-	for (const entry of entries) {
-		let ids: Array<string | undefined | null> = [];
-		let usage: UsageLike | null = null;
-		let isAssistant = false;
-		let ts: Timestamp = entry.timestamp;
-		if (entry.type === "message") {
-			const msg = entry.message;
-			ts = msg.timestamp ?? entry.timestamp;
-			if (msg.role === "assistant") {
-				ids = [msg.responseModel, msg.model];
-				isAssistant = true;
-				usage = msg.usage;
-			} else if (msg.role === "toolResult" && msg.usage) {
-				ids = [lastModel];
-				usage = msg.usage;
-			}
-		} else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
-			ids = [lastModel];
-			usage = entry.usage;
-		}
-		if (!usage) continue;
-		const resolved = rateForIds(ids, ts);
-		if (isAssistant) lastModel = resolved?.model ?? ids[0] ?? null;
-		if (!resolved) {
-			result.total += usage.cost?.total ?? 0;
-			result.fallbackMessages++;
-			for (const id of ids) if (id) unknown.add(id);
-			continue;
-		}
-		const { cost } = requestCost(resolved.model, usage, ts);
-		result.total += cost;
-		const bucket = (result.byModel[resolved.model] ??= { tokens: 0, cost: 0 });
-		bucket.tokens += usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-		bucket.cost += cost;
-		if (isOffPeak(new Date(toMs(ts)))) result.offPeakCost += cost;
-		else result.peakCost += cost;
-	}
-	result.unknownModels = [...unknown];
-	return result;
 }
 
 /**
@@ -300,34 +206,6 @@ export default function (pi: ExtensionAPI) {
 			}
 			updateStatus(ctx);
 			ctx.ui.notify(`Auto-refresh set to ${picked.label}`, "info");
-		},
-	});
-
-	pi.registerCommand("dsp-cost", {
-		description: "Show the real DeepSeek session cost (peak/off-peak rates, per model). Usage: /dsp-cost",
-		handler: async (_args: string, ctx: any) => {
-			const { total, peakCost, offPeakCost, byModel, fallbackMessages, unknownModels } = sessionCost(ctx.sessionManager.getEntries());
-			const fmt = (n: number) => `$${Math.round(n * 10000) / 10000}`;
-			const k = isOffPeak(new Date()) ? 0.5 : 1;
-			const rates = (m: string) => {
-				const r = ratesFor(m);
-				if (!r) return ""; // not in the table; no per-model line for it
-				return `in ${fmt(r.input * k)}/M (hit ${fmt(r.cacheRead * k)}) out ${fmt(r.output * k)}/M`;
-			};
-			const lines = [
-				`${isOffPeak(new Date()) ? "DS Normal" : "DS Peak"}: flash ${rates("deepseek-flash")} · pro ${rates("deepseek-v4-pro")}`,
-				`Total ${fmt(total)} (peak ${fmt(peakCost)} / off-peak ${fmt(offPeakCost)})`,
-			];
-			for (const [model, b] of Object.entries(byModel)) {
-				lines.push(`${model}: ${b.tokens.toLocaleString("en-US")} tok · ${fmt(b.cost)}`);
-			}
-			if (fallbackMessages > 0) {
-				const ids = unknownModels.length ? ` (${unknownModels.join(", ")})` : "";
-				lines.push(
-					`${fallbackMessages} message${fallbackMessages === 1 ? "" : "s"} without a rate entry${ids} — kept at pi's bundled cost`,
-				);
-			}
-			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});
 
