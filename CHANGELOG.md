@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Show `DS Peak` / `DS Normal` and run the status refresh timer only when the active model's provider is `deepseek`; switching to another provider clears the status immediately
+- Chinese public holidays are off-peak all day (official State Council dates, 2026 and 2027 bundled); make-up workdays (调休) need no entry since they fall on a weekend
+- The countdown switches to days for long off-peak stretches ("DS Normal for 8d22h" during Spring Festival) and now scans 21 days ahead so it does not blank out mid-holiday
+- `npm test` fails once the bundled holiday table no longer covers the current year, and from November on also requires next year's dates
 
 ## 1.3.6 (2026-09-16)
 

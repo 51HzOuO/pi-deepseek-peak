@@ -26,7 +26,9 @@ Restart pi or run `/reload` to activate.
 
 ## Usage
 
-Once installed, the status bar shows the current DeepSeek peak period only while the active model's provider is `deepseek`. Switching to another provider hides the indicator; switching back restores it. Peak hours are Mon-Fri 01:00-04:00 and 06:00-10:00 UTC; weekends (Beijing time) are off-peak all day.
+Once installed, the status bar shows the current DeepSeek peak period only while the active model's provider is `deepseek`. Switching to another provider hides the indicator; switching back restores it. Peak hours are Mon-Fri 01:00-04:00 and 06:00-10:00 UTC; weekends (Beijing time) and Chinese public holidays are off-peak all day.
+
+Chinese public holidays come from a table bundled in the source, taken from the official State Council notices on <https://www.gov.cn/> (2026 and 2027 bundled). The State Council publishes the next year's dates in early November, so refresh `CHINA_HOLIDAY_RANGES` in `extensions/deepseek-peak.ts` once a year; from November on, `npm test` fails with a reminder until the next year is in the table. Make-up workdays (调休) need no entry: they always fall on a Saturday or Sunday, which are off-peak anyway. The countdown switches to days for long off-peak stretches ("DS Normal for 8d22h" during Spring Festival).
 
 ### Commands
 
